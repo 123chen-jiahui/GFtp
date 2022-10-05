@@ -3,12 +3,16 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
+
+	"github.com/tool"
 )
 
 func getLocation() string {
@@ -49,7 +53,9 @@ func greetMaster() error {
 	if location == "" {
 		return errors.New("fail to get ip address")
 	}
+	location = "http://" + location + tool.Config.Port
 
+	// url不应该直接写出来
 	response, err := http.PostForm("http://localhost:8080/report", url.Values{
 		"chunks":   chunks,
 		"location": []string{location},
@@ -63,14 +69,39 @@ func greetMaster() error {
 	return nil
 }
 
+// 处理master发过来的chunk
+func addChunk(w http.ResponseWriter, r *http.Request) {
+	file, handle, err := r.FormFile("filename")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	f, err := os.OpenFile(path.Join("./files", handle.Filename), os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		w.WriteHeader((http.StatusBadRequest))
+		return
+	}
+	defer f.Close()
+
+	io.Copy(f, file)
+}
+
 func main() {
 
-	// 联系master
+	// 联系master，并表明自己的location以及chunks
 	err := greetMaster()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(-1)
 	}
 
-	http.ListenAndServe(":8081", nil)
+	http.HandleFunc("/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		// do nothing
+	})
+
+	http.HandleFunc("/chunk", addChunk)
+
+	http.ListenAndServe(tool.Config.Port, nil)
 }
