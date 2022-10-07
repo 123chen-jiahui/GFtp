@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -121,7 +122,7 @@ func Init() {
 }
 
 func sendFile(filePath, URL string) error {
-	filename := filepath.Base(filePath)                                // 这里记载一下filepath.Base的用法
+	filename := filepath.Base(filePath)                                // 这里记载一下filepath.Base的用法(大概用处就是去掉前缀)
 	bodyBuf := &bytes.Buffer{}                                         // 创建一个空的buf
 	bodyWriter := multipart.NewWriter(bodyBuf)                         // 以bodyBuf为缓冲区，创建multipart.Writer
 	fileWriter, err := bodyWriter.CreateFormFile("filename", filename) // 创建一个请求文件
@@ -131,7 +132,7 @@ func sendFile(filePath, URL string) error {
 	}
 
 	// 打开本地的要发送的文件
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) // 打开文件的时候不能使用filename
 	if err != nil {
 		fmt.Printf("Fail to open file: %s\n", filePath)
 		return err
@@ -293,6 +294,70 @@ func upload(w http.ResponseWriter, r *http.Request) {
 	file.Close()
 }
 
+// 下载文件，master只负责处理请求，将cml发送给client
+// 再由client向chunkServer提出申请
+func download(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	filename := r.Form["filename"][0] // 下载的文件名
+	location := r.Form["location"][0] // 客户端地址
+	fmt.Printf("filename is %s, location is %s\n", filename, location)
+
+	if _, i := meta.fmc[Filename(filename)]; !i {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "can not found file: %s\n", filename)
+		return
+	}
+
+	// chunks := make([]string, len(meta.fmc[Filename(filename)])) // 这里不能用make，原因有待进一步分析
+	chunks := []string{}
+	for _, chunk := range meta.fmc[Filename(filename)] {
+		chunks = append(chunks, strconv.Itoa(int(chunk)))
+	}
+	// ===test
+	// fmt.Printf("test: chunks len is %d\n", len(chunks))
+	// ===
+
+	data := make(map[string][]string)
+	data["chunks"] = chunks
+	// ===test
+	// fmt.Printf("test: chunks is %v\n", data["chunks"])
+	// ===
+	for _, chunk := range chunks {
+		chunkInt, _ := strconv.Atoi(chunk)
+		locations := meta.cml[ChunkHandle(chunkInt)]
+		// ===test
+		// fmt.Printf("test: locations is %v\n", locations)
+		// fmt.Printf("test: locations len is %d\n", len(locations))
+		// ===
+		// locationsStr := make([]string, len(locations))
+		locationsStr := []string{}
+		for _, location := range locations {
+			locationsStr = append(locationsStr, string(location))
+		}
+		data[chunk] = locationsStr
+	}
+
+	// ===test
+	// fmt.Printf("test: len is %d\n", len(data["1"]))
+	// fmt.Println(data["1"])
+	// ===
+	msg, err := json.Marshal(data)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "can not marshal data")
+		return
+	}
+
+	w.Write(msg)
+
+	// response, err := http.PostForm(location, data)
+	// if err != nil || response.StatusCode != http.StatusOK {
+	// 	w.WriteHeader(http.StatusBadRequest)
+	// 	fmt.Fprintf(w, "fail to return meta to client: %s", location)
+	// 	return
+	// }
+}
+
 func heartbeat() {
 	for {
 		meta.mu.Lock()
@@ -349,6 +414,9 @@ func main() {
 
 	// 处理上载请求
 	http.HandleFunc("/upload", upload)
+
+	// 处理下载请求
+	http.HandleFunc("/download", download)
 
 	// 发送心跳检查
 	go heartbeat()

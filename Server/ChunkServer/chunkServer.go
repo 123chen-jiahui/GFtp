@@ -88,6 +88,31 @@ func addChunk(w http.ResponseWriter, r *http.Request) {
 	io.Copy(f, file)
 }
 
+// 处理client发送过来的下载chunk的请求
+func download(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	chunkHandle := r.Form["chunk"][0]
+	filename := "./files/" + chunkHandle + ".chunk"
+	fmt.Println(filename)
+
+	content, err := ioutil.ReadFile(filename)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "can not open file: %s", filename)
+		return
+	}
+	// w.Header().Set("Content-Type", "application/octet-stream")
+	_, err = w.Write(content)
+	if err == nil {
+		fmt.Println("no problem")
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Println("aaaaaa")
+		fmt.Println(err)
+	}
+}
+
 func main() {
 
 	// 联系master，并表明自己的location以及chunks
@@ -102,6 +127,8 @@ func main() {
 	})
 
 	http.HandleFunc("/chunk", addChunk)
+
+	http.HandleFunc("/download", download)
 
 	http.ListenAndServe(tool.Config.Port, nil)
 }

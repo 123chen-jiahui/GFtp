@@ -1,2 +1,4 @@
 *.chunk
 *.log
+*.idea
+tmp.go
