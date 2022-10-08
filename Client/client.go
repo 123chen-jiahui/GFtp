@@ -152,6 +152,33 @@ func download(filename string) error {
 	return nil
 }
 
+// 向master询问文件列表
+func list() error {
+	response, err := http.Get(tool.Config.MasterURL + "list")
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != http.StatusOK {
+		fmt.Println("bad code")
+		return errors.New(response.Status)
+	}
+
+	msg, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+
+	res := []string{}
+	err = json.Unmarshal(msg, &res)
+	if err != nil {
+		return err
+	}
+	for i, v := range res {
+		fmt.Printf("%d. %s\n", i+1, v)
+	}
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
@@ -165,7 +192,11 @@ func main() {
 		fmt.Println("The file was uploaded successfully")
 	case "list":
 		// ...
-
+		err := list()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(-1)
+		}
 	case "download":
 		// ...
 		err := download(*path)
@@ -179,6 +210,4 @@ func main() {
 		fmt.Printf("unknown action: %s\n", *action)
 		os.Exit(-1)
 	}
-
-	http.ListenAndServe(tool.Config.Port, nil)
 }

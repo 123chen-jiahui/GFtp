@@ -22,7 +22,7 @@ import (
 )
 
 const chunkSize = 1024 * 1024
-const K = 1
+const K = 2
 
 // master的数据结构
 type Filename string
@@ -52,6 +52,11 @@ func metaInfo() {
 	fmt.Println("*file namespace*:")
 	for _, f := range meta.fnamespace {
 		fmt.Println(f)
+	}
+	fmt.Println("-------------------------------")
+	fmt.Println("*location namespace*:")
+	for _, l := range meta.lnamespace {
+		fmt.Println(l)
 	}
 	fmt.Println("-------------------------------")
 	fmt.Println("*file map chunkHandles*:")
@@ -170,11 +175,11 @@ func report(w http.ResponseWriter, r *http.Request) {
 	for _, v := range r.Form["chunks"] {
 		chunkHandle, _ := strconv.Atoi(v)
 		meta.mu.Lock()
-		if _, i := meta.cml[ChunkHandle(chunkHandle)]; i {
-			fmt.Println("what")
-			meta.mu.Unlock()
-			continue
-		}
+		// if _, i := meta.cml[ChunkHandle(chunkHandle)]; i {
+		// 	fmt.Println("what")
+		// 	meta.mu.Unlock()
+		// 	continue
+		// }
 		meta.cml[ChunkHandle(chunkHandle)] = append(meta.cml[ChunkHandle(chunkHandle)], Location(location))
 		meta.mu.Unlock()
 	}
@@ -263,11 +268,11 @@ func upload(w http.ResponseWriter, r *http.Request) {
 			chunk_recorder[ChunkHandle(chunk_num)] = append(chunk_recorder[ChunkHandle(chunk_num)], meta.lnamespace[index])
 			// meta.cml[ChunkHandle(meta.chunk_generator)] = append(meta.cml[ChunkHandle(meta.chunk_generator)], meta.lnamespace[index])
 			count += 1
-
-			os.Remove("./files/" + Id + ".chunk")
+			m[index] = true
 		}
 
 		// meta.chunk_generator += 1
+		os.Remove("./files/" + Id + ".chunk")
 		chunk_num += 1
 	}
 	// 只有所有chunk都成功发送给了K个chunkServer才能更新meta
@@ -350,12 +355,19 @@ func download(w http.ResponseWriter, r *http.Request) {
 
 	w.Write(msg)
 
+	log.Write("<download> " + string(filename))
+
 	// response, err := http.PostForm(location, data)
 	// if err != nil || response.StatusCode != http.StatusOK {
 	// 	w.WriteHeader(http.StatusBadRequest)
 	// 	fmt.Fprintf(w, "fail to return meta to client: %s", location)
 	// 	return
 	// }
+}
+
+func list(w http.ResponseWriter, r *http.Request) {
+	data, _ := json.Marshal(meta.fnamespace)
+	w.Write(data)
 }
 
 func heartbeat() {
@@ -377,6 +389,7 @@ func heartbeat() {
 							break
 						}
 					}
+					// metaInfo()
 					// 将cml中的location去除，感觉很耗时。。。
 					for chunk, locations := range meta.cml {
 						for i, l := range locations {
@@ -389,6 +402,7 @@ func heartbeat() {
 							}
 						}
 					}
+					metaInfo()
 					fmt.Println(meta.lnamespace)
 					fmt.Println(meta.cml)
 				} else {
@@ -417,6 +431,9 @@ func main() {
 
 	// 处理下载请求
 	http.HandleFunc("/download", download)
+
+	// 处理list请求
+	http.HandleFunc("/list", list)
 
 	// 发送心跳检查
 	go heartbeat()
