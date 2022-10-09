@@ -69,6 +69,55 @@ func upload(filePath string) error {
 	// fmt.Println(filename)
 }
 
+func newUpload(filePath string) error {
+	filename := filepath.Base(filePath)
+
+	bodyBuf := &bytes.Buffer{}
+	bodyWriter := multipart.NewWriter(bodyBuf)
+	fileWriter, err := bodyWriter.CreateFormFile("filename", filename)
+	if err != nil {
+		fmt.Println("fail to create form file")
+		return err
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Printf("fail to open file: %s\n", filePath)
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(fileWriter, file)
+	if err != nil {
+		fmt.Println("fail to copy content from origin file to form file")
+		return err
+	}
+
+	contentType := bodyWriter.FormDataContentType()
+	bodyWriter.Close()
+	response, err := http.Post(tool.Config.MasterURL+"newUpload", contentType, bodyBuf)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		fmt.Printf("fail to upload file: %s\n", filePath)
+		return errors.New("fail to upload file")
+	} else {
+		msg, _ := ioutil.ReadAll(response.Body)
+		if string(msg) == "1" {
+			fmt.Println("断点续传")
+		} else if string(msg) == "2" {
+			fmt.Println("hello")
+		}
+	}
+
+	return nil
+	// fmt.Println(filename)
+}
+
 func download(filename string) error {
 	response, err := http.PostForm(tool.Config.MasterURL+"download", url.Values{
 		"filename": []string{filename},
@@ -185,6 +234,13 @@ func main() {
 	switch *action {
 	case "upload":
 		err := upload(*path)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(-1)
+		}
+		fmt.Println("The file was uploaded successfully")
+	case "newUpload":
+		err := newUpload(*path)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(-1)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -62,4 +63,9 @@ func GetIP(r *http.Request) (string, error) {
 	}
 
 	return "", errors.New("no valid ip found")
+}
+
+func FileExist(filePath string) bool {
+	_, err := os.Lstat(filePath)
+	return !os.IsNotExist(err)
 }

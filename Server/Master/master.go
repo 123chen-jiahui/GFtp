@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math"
 	"math/rand"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,10 +21,11 @@ import (
 	"time"
 
 	"github.com/log"
+	"github.com/tool"
 )
 
 const chunkSize = 1024 * 1024
-const K = 2
+const K = 1
 
 // master的数据结构
 type Filename string
@@ -108,16 +111,47 @@ func Init() {
 					meta.fnamespace = append(meta.fnamespace, Filename(filename))
 				}
 				chunks := []ChunkHandle{}
-				var max int
+				// var max int
 				for _, v := range elements[6:] {
 					i, _ := strconv.Atoi(v)
-					if i > max {
-						max = i
+					if i >= meta.chunk_generator {
+						meta.chunk_generator = i + 1
 					}
+					// if i > max {
+					// 	max = i
+					// }
 					chunks = append(chunks, ChunkHandle(i))
 				}
 				meta.fmc[Filename(filename)] = chunks
-				meta.chunk_generator = max + 1
+				// meta.chunk_generator = max + 1
+			} else if elements[3] == "<removeTmp>" {
+				for _, v := range elements[6:] {
+					i, _ := strconv.Atoi(v)
+					if i >= meta.chunk_generator {
+						meta.chunk_generator = i + 1
+					}
+				}
+			}
+		}
+	}
+
+	// 在临时文件中找到最大的，临时文件中的chunk都已经持久化了，但是不一定被generator记录
+	files, err := ioutil.ReadDir("./files")
+	if err != nil {
+		fmt.Println("can not open directory: files")
+		os.Exit(-1)
+	}
+	for _, file := range files {
+		f, err := os.Open("./files/" + file.Name())
+		if err != nil {
+			fmt.Printf("can not open file: %s\n", file.Name())
+			os.Exit(-1)
+		}
+		content, _ := ioutil.ReadAll(f)
+		chunks := strings.Split(string(content), " ")
+		for _, chunk := range chunks {
+			if chunkInt, _ := strconv.Atoi(chunk); chunkInt >= meta.chunk_generator {
+				meta.chunk_generator = chunkInt + 1
 			}
 		}
 	}
@@ -186,6 +220,273 @@ func report(w http.ResponseWriter, r *http.Request) {
 	// fmt.Println(meta)
 	// fmt.Println(r.Form)
 	metaInfo()
+}
+
+// 检查
+func check(chunks []string, fileSize int64, file multipart.File) bool {
+	m := make(map[int]bool) // 失败后不重复访问同一chunkServer
+	var faultTime int       // 请求失败次数不能超过三次
+	// var okTime int // 验证成功的chunk数
+	rand.Seed(time.Now().Unix())
+	for i, chunk := range chunks {
+		chunkInt, _ := strconv.Atoi(chunk)
+		for faultTime < 3 {
+			index := rand.Intn(len(meta.cml[ChunkHandle(chunkInt)]))
+			if m[index] {
+				continue
+			}
+
+			// 向chunkServer发送获取chunk的请求
+			location := meta.cml[ChunkHandle(chunkInt)][index]
+			params := url.Values{}
+			parseURL, err := url.Parse(string(location) + "/chunk")
+			if err != nil {
+				fmt.Println(err)
+				return false
+			}
+			params.Set("chunkHandle", chunk)
+			parseURL.RawQuery = params.Encode()
+			urlPathWithParams := parseURL.String()
+			fmt.Printf("check: url is %s\n", urlPathWithParams)
+			response, err := http.Get(urlPathWithParams)
+			if err != nil {
+				faultTime += 1
+				fmt.Printf("fail to check for the %d time: %v\n", faultTime, err)
+				continue
+			}
+			defer response.Body.Close()
+
+			if response.StatusCode != http.StatusOK {
+				faultTime += 1
+				fmt.Printf("fail to check for the %d time: %v\n", faultTime, response.Body)
+				continue
+			}
+
+			msg, err := io.ReadAll(response.Body)
+			if err != nil {
+				fmt.Println(err)
+				return false
+			}
+
+			// 取出原文件中的对应内容
+			file.Seek(int64(i)*chunkSize, 0)
+			var b []byte
+			if chunkSize > int(fileSize-int64(i)*chunkSize) {
+				b = make([]byte, fileSize-int64(i)*chunkSize)
+			} else {
+				b = make([]byte, chunkSize)
+			}
+			file.Read(b)
+			// ===test
+			// tmpFile, _ := os.OpenFile("tmp.chunk", os.O_CREATE|os.O_RDWR, 0600)
+			// tmpFile.Write(msg)
+			// tmpFile.Close()
+
+			// tmpFile, _ = os.OpenFile("tmp2.chunk", os.O_CREATE|os.O_RDWR, 0600)
+			// tmpFile.Write(b)
+			// tmpFile.Close()
+			// ===
+
+			// 对比
+			if bytes.Equal(msg, b) {
+				fmt.Printf("第%d个chunk检测通过\n", i+1)
+				// okTime += 1
+				faultTime = 0
+				break
+			} else {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func newUpload(w http.ResponseWriter, r *http.Request) {
+	if len(meta.lnamespace) < K {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "no enough chunkServer")
+		return
+	}
+	file, handler, err := r.FormFile("filename")
+	if err != nil {
+		// w.Write([]byte("can not open file")) // 不能使用这个来提示错误信息！否则报错Header被二次写入
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, "can not open the form file")
+		return
+	}
+
+	num := math.Ceil(float64(handler.Size) / chunkSize)
+	var i int64 = 1
+
+	tmpFilename := handler.Filename + ".tmp"
+	tmpFilePath := "./files/" + tmpFilename
+	hasTmpFile := tool.FileExist(tmpFilePath)
+	chunkNumRecoder := []int{} // 记录chunkHandle
+	var tmpFile *os.File
+	if hasTmpFile {
+		// 给点提示:)
+		// fmt.Println("检测到传输中断的文件")
+
+		// 给client发送请求，说明需要断点续传
+		go func(http.ResponseWriter) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "1")
+		}(w)
+		// ===test
+		fmt.Fprint(w, "2")
+		// ===test
+		tmpFile, err = os.OpenFile(tmpFilePath, os.O_APPEND, 0600)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "fail to open tmp file")
+			return
+		}
+
+		res, _ := ioutil.ReadAll(tmpFile)
+		chunks := strings.Split(string(res), " ")
+
+		// 验证已经写入的chunk与将要写入的文件内容是否一致
+		// ...
+		if !check(chunks, handler.Size, file) {
+			fmt.Println("文件内容已经变化")
+			// 删除tmp，并重新传，需要将chunks写入日志
+			tmpFile.Close()
+			os.Remove(tmpFilePath)
+
+			info := "<removeTmp> " + string(tmpFilename) + " <shard> "
+			for _, chunk := range chunks {
+				info += chunk + " "
+			}
+			info = info[:len(info)-1]
+			log.Write(info)
+		} else {
+			fmt.Println("文件内容无变化")
+			// 在原有的基础上继续传
+			for _, chunk := range chunks {
+				chunkInt, _ := strconv.Atoi(chunk)
+				chunkNumRecoder = append(chunkNumRecoder, chunkInt)
+			}
+			i = int64(len(chunks) + 1)
+		}
+	} else {
+		tmpFile, err = os.OpenFile(tmpFilePath, os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "fail to create tmp file")
+			return
+		}
+	}
+	defer tmpFile.Close()
+
+	meta.mu.Lock()
+	// chunk_num := meta.chunk_generator
+	chunkNum := &meta.chunk_generator // 变量名太长了，改个名字...
+	defer meta.mu.Unlock()
+	// chunk_recorder := make(map[ChunkHandle][]Location)
+	// 枚举chunk
+	for ; i <= int64(num); i++ {
+		file.Seek((i-1)*chunkSize, 0)
+		var b []byte
+		if chunkSize > int(handler.Size-(i-1)*chunkSize) {
+			b = make([]byte, handler.Size-(i-1)*chunkSize)
+		} else {
+			b = make([]byte, chunkSize)
+		}
+		file.Read(b)
+
+		// meta.mu.Lock() // 这个锁还有改进空间（太大了）
+		// defer meta.mu.Unlock()
+
+		Id := strconv.Itoa(*chunkNum)
+		// Id := strconv.Itoa(meta.chunk_generator)
+		f, err := os.OpenFile("./files/"+Id+".chunk", os.O_CREATE|os.O_WRONLY, os.ModePerm)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "fail to create chunk")
+			return
+		}
+		f.Write(b)
+		f.Close()
+		// 添加文件名到chunkhandle的映射
+		// meta.fmc[Filename(handler.Filename)] = append(meta.fmc[Filename(handler.Filename)], ChunkHandle(meta.chunk_generator))
+
+		// 将chunk发送给chunkserver后删除
+		// 随机选取K个chunkserver
+		rand.Seed(time.Now().Unix())
+		m := make(map[int]bool)        // 检查是否已经发送给该chunk过了
+		fail_recoder := make([]int, K) // 记录失败次数
+		var count int
+		for count < K {
+			index := rand.Intn(len(meta.lnamespace))
+			if _, i := m[index]; i {
+				continue
+			}
+			err = sendFile("./files/"+Id+".chunk", string(meta.lnamespace[index])+"/chunk")
+			if err != nil {
+				// panic(err) // 这里直接就panic掉了，更好的方法应该是选取其他的fileserver。以后再写
+				// 发送chunk失败，需要重新发送，容忍3次失败，否则直接报错
+				if fail_recoder[count] < 3 {
+					fmt.Println("fail!")
+					fail_recoder[count] += 1
+					continue
+				} else {
+					// 如果一个文件被分为3个chunk，前2个chunk发送成功，最后1个发送失败
+					// 那么在master中不会记录有关这个文件的信息，即使有2个chunk被chunkserver存了
+					// 在下载文件的时候，是检查不到这个文件的
+					os.Remove("./files/" + Id + ".chunk")
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, "fail to send chunk to chunkServer")
+					return
+				}
+			}
+			// 记录chunkHandle到location的映射
+			// chunk_recorder[ChunkHandle(*chunkNum)] = append(chunk_recorder[ChunkHandle(*chunkNum)], meta.lnamespace[index])
+			meta.cml[ChunkHandle(*chunkNum)] = append(meta.cml[ChunkHandle(*chunkNum)], meta.lnamespace[index])
+
+			count += 1
+			m[index] = true
+		}
+
+		chunkNumRecoder = append(chunkNumRecoder, *chunkNum)
+		if i == 1 {
+			tmpFile.Write([]byte(strconv.Itoa(*chunkNum)))
+		} else {
+			tmpFile.Write([]byte(" " + strconv.Itoa(*chunkNum)))
+		}
+		// meta.chunk_generator += 1
+		os.Remove("./files/" + Id + ".chunk")
+		*chunkNum += 1
+
+		// ===test 人为打断
+		// if i > 0 {
+		// 	return
+		// }
+		// ===
+	}
+	// 只有所有chunk都成功发送给了K个chunkServer才能更新meta
+	meta.fmc[Filename(handler.Filename)] = []ChunkHandle{}
+	for _, v := range chunkNumRecoder {
+		meta.fmc[Filename(handler.Filename)] = append(meta.fmc[Filename(handler.Filename)], ChunkHandle(v))
+	}
+
+	if _, i := meta.fmc[Filename(handler.Filename)]; !i {
+		meta.fnamespace = append(meta.fnamespace, Filename(handler.Filename))
+	}
+
+	tmpFile.Close() // 必须要先关闭文件才能删除文件
+	os.Remove(tmpFilePath)
+
+	info := "<upload> " + string(handler.Filename) + " <shard> "
+	for _, k := range chunkNumRecoder {
+		info += strconv.Itoa(int(k))
+		info += " "
+	}
+	info = info[:len(info)-1]
+	log.Write(info)
+
+	metaInfo()
+
+	file.Close()
 }
 
 func upload(w http.ResponseWriter, r *http.Request) {
@@ -428,6 +729,7 @@ func main() {
 
 	// 处理上载请求
 	http.HandleFunc("/upload", upload)
+	http.HandleFunc("/newUpload", newUpload)
 
 	// 处理下载请求
 	http.HandleFunc("/download", download)
