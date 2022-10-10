@@ -305,6 +305,7 @@ func check(chunks []string, fileSize int64, file multipart.File) bool {
 	return true
 }
 
+// 对于给定的chunkHandle(string)，到随机的chunkServer中找到内容并返回
 func getChunk(chunk string) ([]byte, error) {
 	chunkInt, _ := strconv.Atoi(chunk)
 	chunkHandle := ChunkHandle(chunkInt)
@@ -357,6 +358,7 @@ func getChunk(chunk string) ([]byte, error) {
 	return nil, errors.New("can not get chunk")
 }
 
+// 通过TCP，向随机的chunkServer发送chunk
 func send(chunkNum ChunkHandle, chunkFileName string, conn net.Conn) {
 	rand.Seed(time.Now().Unix())
 	m := make(map[int]bool)        // 检查是否已经发送给该chunk过了
@@ -395,23 +397,6 @@ func send(chunkNum ChunkHandle, chunkFileName string, conn net.Conn) {
 	}
 }
 
-func messageRound(conn net.Conn, msg, hope string, buf []byte) bool {
-	conn.Write([]byte(msg))
-
-	conn.Read(buf)
-	return string(buf) == hope
-}
-
-func waitResponse(conn net.Conn, hope string) bool {
-	buffer := make([]byte, 1024)
-	conn.Read(buffer)
-	if string(buffer) == hope {
-		return true
-	} else {
-		return false
-	}
-}
-
 func handleConnection(conn net.Conn) {
 	fmt.Println("hello world")
 	var msg string
@@ -427,10 +412,6 @@ func handleConnection(conn net.Conn) {
 		return
 	} else {
 		fmt.Printf("filename from client: %s\n", string(buf))
-		//if !messageRound(conn, "ok", "ok", buf) {
-		//	fmt.Println("response与预期不符")
-		//	return
-		//}
 		conn.Write([]byte("ok"))
 	}
 	fileName = string(buf[:n])
@@ -456,16 +437,16 @@ func handleConnection(conn net.Conn) {
 	chunkNumRecoder := []int{} // 记录chunkHandle
 	var tmpFile *os.File
 	var tmpFileChanged bool
-
+	// 解释一下tmpFileChanged的作用：
+	// 这个变量名没有取好，它是用来判断本次上传的文件和以往被中断的文件(的已上传部分)是否相同
+	// 若相同，则不用从头开始传，继续从conn中读取内容即可
+	// 若不同，则需要从头开始传。由于conn中部分内容已经被读掉了，所以fileBuf用来保存这部分内容
+	
 	fileBuf := bytes.Buffer{} // 读取文件
 	chunkBuf := make([]byte, chunkSize)
 
 	if hasTmpFile { // 是一个断点文件
 		msg = "[info] 发现传输中断的文件：" + tmpFilename
-		//if !messageRound(conn, msg, "ok", buf) {
-		//	fmt.Println("response与预期不符")
-		//	return
-		//}
 		conn.Write([]byte(msg))
 
 		tmpFile, err = os.OpenFile(tmpFilePath, os.O_APPEND, 0600)
@@ -502,10 +483,6 @@ func handleConnection(conn net.Conn) {
 		}
 		if tmpFileChanged { // 文件有变化
 			msg = "[info] 检测到文件内容发生变化，正在替换文件..."
-			//if !messageRound(conn, msg, "ok", buf) {
-			//	fmt.Println("response与预期不符")
-			//	return
-			//}
 			conn.Write([]byte(msg))
 
 			tmpFile.Close()
@@ -527,10 +504,6 @@ func handleConnection(conn net.Conn) {
 			log.Write(info)
 		} else { // 文件无变化
 			msg = "[info] 文件检查无误，正在续传文件..."
-			//if !messageRound(conn, msg, "ok", buf) {
-			//	fmt.Println("response与预期不符")
-			//	return
-			//}
 			conn.Write([]byte(msg))
 
 			for _, chunk := range chunks {
@@ -540,10 +513,6 @@ func handleConnection(conn net.Conn) {
 		}
 	} else { // 一个正常的文件
 		msg = "[info] 正在上传..."
-		//if !messageRound(conn, msg, "ok", buf) {
-		//	fmt.Println("response与预期不符")
-		//	return
-		//}
 		conn.Write([]byte(msg))
 
 		tmpFile, err = os.OpenFile(tmpFilePath, os.O_CREATE|os.O_RDWR, 0600)
