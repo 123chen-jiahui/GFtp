@@ -10,14 +10,18 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/tool"
 )
+
+const chunkSize = 1024 * 1024
 
 func StrInterface(i interface{}) string {
 	s := fmt.Sprintf("%v", i)
@@ -102,6 +106,9 @@ func newUpload(filePath string) error {
 	}
 	defer response.Body.Close()
 
+	// 10.10任务
+	// 解决master和client的通信问题：使用socket（服务端部署到云服务器时，注意要使用内网ip）
+	// 用socket解决这个问题很优雅（用信道channel）。但同时考虑使用http的可行性
 	if response.StatusCode != http.StatusOK {
 		fmt.Printf("fail to upload file: %s\n", filePath)
 		return errors.New("fail to upload file")
@@ -116,6 +123,92 @@ func newUpload(filePath string) error {
 
 	return nil
 	// fmt.Println(filename)
+}
+
+func tcpUpload(filePath string) {
+	server := tool.Config.MasterIpPort
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", server)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		os.Exit(1)
+	}
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		os.Exit(1)
+	}
+	fmt.Println("connection success")
+
+	buffer := make([]byte, 2048)
+
+	// 发送文件名
+	fileName := filepath.Base(filePath)
+	conn.Write([]byte(fileName))
+	n, _ := conn.Read(buffer)
+	if string(buffer[:n]) != "ok" {
+		fmt.Println("[error] 发送文件名失败")
+		os.Exit(-1)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func(conn net.Conn) {
+		buffer := make([]byte, 100)
+		for {
+			n, err = conn.Read(buffer)
+			if err != nil {
+				fmt.Printf("waiting server back msg error: %v", err)
+				os.Exit(-1)
+			}
+			if string(buffer[:n]) == "end" {
+				fmt.Println("文件上传成功")
+				break
+			} else {
+				fmt.Println(string(buffer[:n]))
+			}
+		}
+		wg.Done()
+	}(conn)
+
+	// conn.Write([]byte("ok"))
+	// 发送文件内容
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Printf("打开文件%s失败", filePath)
+		os.Exit(-1)
+	}
+	defer file.Close()
+	for {
+		buf := make([]byte, chunkSize)
+		n, err := file.Read(buf)
+		if err != nil && io.EOF == err {
+			conn.Write([]byte("finish"))
+			break
+		}
+		conn.Write(buf[:n])
+	}
+	// content, err := os.ReadFile(filePath)
+	// if err != nil {
+	// 	fmt.Println("fail to read from file: " + filePath)
+	// 	os.Exit(-1)
+	// }
+	// conn.Write(content)
+
+	wg.Wait()
+	// for {
+	// 	_, err = conn.Read(buffer)
+	// 	if err != nil {
+	// 		fmt.Printf("waiting server back msg error: %v", err)
+	// 		os.Exit(-1)
+	// 	}
+	// 	if string(buffer) == "end" {
+	// 		fmt.Println("文件上传成功")
+	// 		break
+	// 	} else {
+	// 		fmt.Println(string(buffer))
+	// 		conn.Write([]byte("ok"))
+	// 	}
+	// }
 }
 
 func download(filename string) error {
@@ -246,6 +339,8 @@ func main() {
 			os.Exit(-1)
 		}
 		fmt.Println("The file was uploaded successfully")
+	case "tcpUpload":
+		tcpUpload(*path)
 	case "list":
 		// ...
 		err := list()

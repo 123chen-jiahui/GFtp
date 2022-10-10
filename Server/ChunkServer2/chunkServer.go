@@ -72,22 +72,36 @@ func greetMaster() error {
 }
 
 // 处理master发过来的chunk
-func addChunk(w http.ResponseWriter, r *http.Request) {
-	file, handle, err := r.FormFile("filename")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+func handleChunk(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(r.Method)
+	if r.Method == "POST" { // 处理master发来的POST请求（添加chunk）
+		file, handle, err := r.FormFile("filename")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
 
-	f, err := os.OpenFile(path.Join("./files", handle.Filename), os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		w.WriteHeader((http.StatusBadRequest))
-		return
-	}
-	defer f.Close()
+		f, err := os.OpenFile(path.Join("./files", handle.Filename), os.O_WRONLY|os.O_CREATE, 0666)
+		if err != nil {
+			w.WriteHeader((http.StatusBadRequest))
+			return
+		}
+		defer f.Close()
 
-	io.Copy(f, file)
+		io.Copy(f, file)
+	} else if r.Method == "GET" { // 处理master发来的GET请求（返回对应的chunk内容）
+		query := r.URL.Query()
+		chunk := query["chunkHandle"][0]
+		chunkPath := "./files/" + string(chunk) + ".chunk"
+		msg, err := os.ReadFile(chunkPath)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "can not open file: %s.chunk", chunk)
+			return
+		}
+		w.Write(msg)
+	}
 }
 
 // 处理client发送过来的下载chunk的请求
@@ -137,7 +151,7 @@ func main() {
 		// do nothing
 	})
 
-	http.HandleFunc("/chunk", addChunk)
+	http.HandleFunc("/chunk", handleChunk)
 
 	http.HandleFunc("/download", download)
 

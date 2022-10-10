@@ -8,8 +8,9 @@ import (
 )
 
 type CONFIG struct {
-	MasterURL string `json:"masterURL"`
-	Port      string `json:"port"`
+	MasterURL    string `json:"masterURL"`
+	MasterIpPort string `json:"masterIpPort"`
+	Port         string `json:"port"`
 }
 
 var Config CONFIG
