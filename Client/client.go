@@ -7,13 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,125 +23,33 @@ import (
 
 const chunkSize = 1024 * 1024
 
+// StrInterface 将interface转换为string
 func StrInterface(i interface{}) string {
 	s := fmt.Sprintf("%v", i)
 	return s
 }
 
 var action = flag.String("action", "", "upload or download")
-var path = flag.String("path", "", "the path of file uploaded or the saved")
+var p = flag.String("path", "", "the path of file uploaded or the saved")
+var f = flag.String("file", "", "the file you want to download from server")
 
 func tip(prefix, content string) {
 	fmt.Println("[" + prefix + "] " + content)
-}
-
-func upload(filePath string) error {
-	filename := filepath.Base(filePath)
-
-	bodyBuf := &bytes.Buffer{}
-	bodyWriter := multipart.NewWriter(bodyBuf)
-	fileWriter, err := bodyWriter.CreateFormFile("filename", filename)
-	if err != nil {
-		fmt.Println("fail to create form file")
-		return err
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		fmt.Printf("fail to open file: %s\n", filePath)
-		return err
-	}
-	defer file.Close()
-
-	_, err = io.Copy(fileWriter, file)
-	if err != nil {
-		fmt.Println("fail to copy content from origin file to form file")
-		return err
-	}
-
-	contentType := bodyWriter.FormDataContentType()
-	bodyWriter.Close()
-	response, err := http.Post(tool.Config.MasterURL+"upload", contentType, bodyBuf)
-	if err != nil {
-		fmt.Println(err)
-		return err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		fmt.Printf("fail to upload file: %s\n", filePath)
-		return errors.New("fail to upload file")
-	}
-
-	return nil
-	// fmt.Println(filename)
-}
-
-func newUpload(filePath string) error {
-	filename := filepath.Base(filePath)
-
-	bodyBuf := &bytes.Buffer{}
-	bodyWriter := multipart.NewWriter(bodyBuf)
-	fileWriter, err := bodyWriter.CreateFormFile("filename", filename)
-	if err != nil {
-		fmt.Println("fail to create form file")
-		return err
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		fmt.Printf("fail to open file: %s\n", filePath)
-		return err
-	}
-	defer file.Close()
-
-	_, err = io.Copy(fileWriter, file)
-	if err != nil {
-		fmt.Println("fail to copy content from origin file to form file")
-		return err
-	}
-
-	contentType := bodyWriter.FormDataContentType()
-	bodyWriter.Close()
-	response, err := http.Post(tool.Config.MasterURL+"newUpload", contentType, bodyBuf)
-	if err != nil {
-		fmt.Println(err)
-		return err
-	}
-	defer response.Body.Close()
-
-	// 10.10任务
-	// 解决master和client的通信问题：使用socket（服务端部署到云服务器时，注意要使用内网ip）
-	// 用socket解决这个问题很优雅（用信道channel）。但同时考虑使用http的可行性
-	if response.StatusCode != http.StatusOK {
-		fmt.Printf("fail to upload file: %s\n", filePath)
-		return errors.New("fail to upload file")
-	} else {
-		msg, _ := ioutil.ReadAll(response.Body)
-		if string(msg) == "1" {
-			fmt.Println("断点续传")
-		} else if string(msg) == "2" {
-			fmt.Println("hello")
-		}
-	}
-
-	return nil
-	// fmt.Println(filename)
 }
 
 func tcpUpload(filePath string) {
 	server := tool.Config.MasterIpPort
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", server)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
-		os.Exit(1)
+		tip("error", err.Error())
+		return
 	}
 	conn, err := net.DialTCP("tcp", nil, tcpAddr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
-		os.Exit(1)
+		tip("error", err.Error())
+		return
 	}
-	fmt.Println("connection success")
+	tip("info", "TCP连接建立成功")
 
 	buffer := make([]byte, 2048)
 
@@ -151,8 +58,8 @@ func tcpUpload(filePath string) {
 	conn.Write([]byte(fileName))
 	n, _ := conn.Read(buffer)
 	if string(buffer[:n]) != "ok" {
-		fmt.Println("[error] 发送文件名失败")
-		os.Exit(-1)
+		tip("error", "发送文件名失败")
+		return
 	}
 
 	// 此处信道作用：master发出任何error信号时，停止client的上传文件操作
@@ -165,11 +72,11 @@ func tcpUpload(filePath string) {
 		for {
 			n, err = conn.Read(buffer)
 			if err != nil {
-				fmt.Printf("waiting server back msg error: %v", err)
+				tip("error", "读取服务器返回信息出错："+err.Error())
 				os.Exit(-1)
 			}
 			if string(buffer[:n]) == "end" {
-				fmt.Println("文件上传成功")
+				tip("info", "文件上传成功")
 				break
 			} else {
 				fmt.Println(string(buffer[:n]))
@@ -187,8 +94,8 @@ func tcpUpload(filePath string) {
 	// 发送文件内容
 	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Printf("打开文件%s失败", filePath)
-		os.Exit(-1)
+		tip("error", "打开文件"+filePath+"失败")
+		return
 	}
 	defer file.Close()
 Loop:
@@ -205,31 +112,9 @@ Loop:
 		default:
 			conn.Write(buf[:n])
 		}
-
-		//conn.Write(buf[:n]) // 我猜这里缓冲区会阻塞，
 	}
-	// content, err := os.ReadFile(filePath)
-	// if err != nil {
-	// 	fmt.Println("fail to read from file: " + filePath)
-	// 	os.Exit(-1)
-	// }
-	// conn.Write(content)
 
 	wg.Wait()
-	// for {
-	// 	_, err = conn.Read(buffer)
-	// 	if err != nil {
-	// 		fmt.Printf("waiting server back msg error: %v", err)
-	// 		os.Exit(-1)
-	// 	}
-	// 	if string(buffer) == "end" {
-	// 		fmt.Println("文件上传成功")
-	// 		break
-	// 	} else {
-	// 		fmt.Println(string(buffer))
-	// 		conn.Write([]byte("ok"))
-	// 	}
-	// }
 }
 
 // 用于批量移除指定目录中的指定后缀文件
@@ -241,7 +126,6 @@ func removeFilesWithSuffix(prefix []string, suffix, dir string) {
 
 // 向指定chunkServer获取指定的chunk
 func getChunk(location string, chunk string) ([]byte, error) {
-	fmt.Println(location)
 	response, err := http.PostForm(location+"/download", url.Values{
 		"chunk": []string{chunk},
 	})
@@ -264,7 +148,7 @@ func getChunk(location string, chunk string) ([]byte, error) {
 // 最后将结果拼在一起得到最终的文件
 // 改进意见：
 // 1、这里可以改成get请求（小事）
-func download(filename string) {
+func download(filename string, filepath string) {
 	response, err := http.PostForm(tool.Config.MasterURL+"download", url.Values{
 		"filename": []string{filename},
 		"location": []string{tool.Location},
@@ -339,21 +223,6 @@ func download(filename string) {
 					return
 				}
 
-				//response, err := http.PostForm(locationStr+"/download", url.Values{
-				//	"chunks": []string{tmpFileChunkStr},
-				//})
-				//if err != nil {
-				//	tip("error", "向chunkServer发送HTTP请求失败")
-				//	return
-				//}
-				//if response.StatusCode != http.StatusOK {
-				//	responseBody, _ := io.ReadAll(response.Body)
-				//	msg := fmt.Sprintf("http请求错误，状态码：%v，响应：%v", response.StatusCode, responseBody)
-				//	tip("error", msg)
-				//	return
-				//}
-				//
-
 				bytesChecked.Write(contentFromRemote)
 
 				// 来自本地的chunk内容
@@ -400,7 +269,7 @@ func download(filename string) {
 ContinueDownload:
 	// 获取剩余为获取的chunk
 	bytesLeft := bytes.Buffer{}
-	var strOfChunksInterface []string // 保存chunsInterface的string类型拷贝
+	var strOfChunksInterface []string // 保存chunksInterface的string类型拷贝
 	for ptr < len(chunksInterface) {
 		//if ptr > 3 {
 		//	return
@@ -442,7 +311,7 @@ ContinueDownload:
 	bytesAll.Write(bytesLeft.Bytes())
 
 	// 生成最终的文件
-	targetFile, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0600)
+	targetFile, err := os.OpenFile(path.Join(filepath, filename), os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		tip("error", "创建文件失败")
 		return
@@ -454,72 +323,35 @@ ContinueDownload:
 	removeFilesWithSuffix(strOfChunksInterface, ".chunk", tmpDir)
 	os.Remove(tmpFilePath)
 	return
-
-	//var buf bytes.Buffer // 用于拼接所有的chunk
-	//
-	//rand.Seed(time.Now().Unix())
-	//for _, chunkInterface := range chunksInterface { // 依此枚举chunkHandle
-	//	chunkStr := StrInterface(chunkInterface)
-	//	locationsInterface := res[chunkStr].([]interface{})
-	//	locationNum := len(locationsInterface)
-	//	// 选择任意一个location
-	//	index := rand.Intn(locationNum)
-	//	// 向该chunkServer发送获取该chunk的请求，需要指定chunkHandle
-	//	locationInterface := locationsInterface[index]
-	//	locationStr := StrInterface(locationInterface)
-	//
-	//	fmt.Println("here!" + locationStr + "/download")
-	//	response, err := http.PostForm(locationStr+"/download", url.Values{
-	//		"chunk": []string{chunkStr},
-	//	})
-	//	if err != nil {
-	//		fmt.Println("err")
-	//		return err
-	//	}
-	//	if response.StatusCode != http.StatusOK {
-	//		msg, _ := io.ReadAll(response.Body)
-	//		fmt.Println(string(msg))
-	//		// fmt.Println("bad code")
-	//		return errors.New(response.Status)
-	//	}
-	//	content, _ := io.ReadAll(response.Body)
-	//	buf.Write(content)
-	//}
-	//
-	//file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0600)
-	//if err != nil {
-	//	return err
-	//}
-	//file.Write(buf.Bytes())
-	//file.Close()
-	//return nil
 }
 
 // 向master询问文件列表
-func list() error {
+func list() {
 	response, err := http.Get(tool.Config.MasterURL + "list")
 	if err != nil {
-		return err
+		msg := fmt.Sprintf("无法与服务器通信：%v", err)
+		tip("error", msg)
+		return
 	}
 	if response.StatusCode != http.StatusOK {
-		fmt.Println("bad code")
-		return errors.New(response.Status)
+		responseBody, _ := io.ReadAll(response.Body)
+		msg := fmt.Sprintf("http请求错误，状态码：%v，响应：%v", response.StatusCode, string(responseBody))
+		tip("error", msg)
+		return
 	}
 
-	msg, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
+	msg, _ := io.ReadAll(response.Body)
 
-	res := []string{}
+	var res []string
 	err = json.Unmarshal(msg, &res)
 	if err != nil {
-		return err
+		msg := fmt.Sprintf("数据反序列化出错：%v", err)
+		tip("error", msg)
+		return
 	}
 	for i, v := range res {
 		fmt.Printf("%d. %s\n", i+1, v)
 	}
-	return nil
 }
 
 func main() {
@@ -527,34 +359,12 @@ func main() {
 
 	switch *action {
 	case "upload":
-		err := upload(*path)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(-1)
-		}
-		fmt.Println("The file was uploaded successfully")
-	case "newUpload":
-		err := newUpload(*path)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(-1)
-		}
-		fmt.Println("The file was uploaded successfully")
-	case "tcpUpload":
-		tcpUpload(*path)
+		tcpUpload(*p)
 	case "list":
-		// ...
-		err := list()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(-1)
-		}
+		list()
 	case "download":
-		// ...
-		download(*path)
-
+		download(*f, *p)
 	default:
 		fmt.Printf("unknown action: %s\n", *action)
-		os.Exit(-1)
 	}
 }

@@ -58,8 +58,8 @@ func init() {
 		panic(err)
 	}
 	Location = "http://" + ipAddress + Config.Port
-	fmt.Println(Config)
-	fmt.Println(Location)
+	//fmt.Println(Config)
+	//fmt.Println(Location)
 }
 
 func FileExist(filePath string) bool {
