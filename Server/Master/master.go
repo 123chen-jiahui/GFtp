@@ -945,7 +945,7 @@ func upload(w http.ResponseWriter, r *http.Request) {
 func download(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	filename := r.Form["filename"][0] // 下载的文件名
-	location := r.Form["location"][0] // 客户端地址
+	location := r.Form["location"][0] // 客户端地址（这似乎没用）
 	fmt.Printf("filename is %s, location is %s\n", filename, location)
 
 	if _, i := meta.fmc[Filename(filename)]; !i {

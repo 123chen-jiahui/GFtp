@@ -61,3 +61,8 @@ func init() {
 	fmt.Println(Config)
 	fmt.Println(Location)
 }
+
+func FileExist(filePath string) bool {
+	_, err := os.Lstat(filePath)
+	return !os.IsNotExist(err)
+}
