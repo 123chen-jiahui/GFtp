@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,9 +151,12 @@ func tcpUpload(filePath string) {
 		os.Exit(-1)
 	}
 
+	// 此处信道作用：master发出任何error信号时，停止client的上传文件操作
+	// 一没必要；二如果文件较大，会阻塞缓冲区
+	ch := make(chan int)
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func(conn net.Conn) {
+	go func(conn net.Conn, ch chan int) {
 		buffer := make([]byte, 100)
 		for {
 			n, err = conn.Read(buffer)
@@ -165,10 +169,15 @@ func tcpUpload(filePath string) {
 				break
 			} else {
 				fmt.Println(string(buffer[:n]))
+				msgList := strings.Split(string(buffer[:n]), " ")
+				if msgList[0] == "[error]" {
+					ch <- 1
+					break
+				}
 			}
 		}
 		wg.Done()
-	}(conn)
+	}(conn, ch)
 
 	// conn.Write([]byte("ok"))
 	// 发送文件内容
@@ -178,6 +187,7 @@ func tcpUpload(filePath string) {
 		os.Exit(-1)
 	}
 	defer file.Close()
+Loop:
 	for {
 		buf := make([]byte, chunkSize)
 		n, err := file.Read(buf)
@@ -185,7 +195,14 @@ func tcpUpload(filePath string) {
 			conn.Write([]byte("finish"))
 			break
 		}
-		conn.Write(buf[:n])
+		select {
+		case <-ch:
+			break Loop
+		default:
+			conn.Write(buf[:n])
+		}
+
+		//conn.Write(buf[:n]) // 我猜这里缓冲区会阻塞，
 	}
 	// content, err := os.ReadFile(filePath)
 	// if err != nil {

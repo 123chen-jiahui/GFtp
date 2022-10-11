@@ -26,7 +26,7 @@ import (
 )
 
 const chunkSize = 1024 * 1024
-const K = 2
+const K = 2 // 表示chunk需要被复制并发送到不同chunkServer的份数，chunkServer数量需不小于K
 
 var netListen net.Listener
 
@@ -398,6 +398,7 @@ func send(chunkNum ChunkHandle, chunkFileName string, conn net.Conn) {
 }
 
 func handleConnection(conn net.Conn) {
+
 	fmt.Println("hello world")
 	var msg string
 	var fileName string
@@ -441,7 +442,7 @@ func handleConnection(conn net.Conn) {
 	// 这个变量名没有取好，它是用来判断本次上传的文件和以往被中断的文件(的已上传部分)是否相同
 	// 若相同，则不用从头开始传，继续从conn中读取内容即可
 	// 若不同，则需要从头开始传。由于conn中部分内容已经被读掉了，所以fileBuf用来保存这部分内容
-	
+
 	fileBuf := bytes.Buffer{} // 读取文件
 	chunkBuf := make([]byte, chunkSize)
 
@@ -569,8 +570,15 @@ StartUploading:
 		f.Write(chunkBuf)
 		f.Close()
 
-		// 发送该chunk临时文件
-		send(ChunkHandle(*chunkNum), chunkFileName, conn)
+		// 发送该chunk临时文件，需要检查chunkServer数量和K
+		if len(meta.lnamespace) >= K {
+			send(ChunkHandle(*chunkNum), chunkFileName, conn)
+		} else {
+			msg = "[error] 文件服务器数量不足，请联系管理员添加"
+			conn.Write([]byte(msg))
+			meta.mu.Unlock()
+			return
+		}
 		// 修改元数据
 		chunkNumRecoder = append(chunkNumRecoder, *chunkNum)
 		if first {
