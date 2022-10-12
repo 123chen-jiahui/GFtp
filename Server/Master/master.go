@@ -44,6 +44,18 @@ type master_meta struct {
 	mu              sync.Mutex                 // 并发访问
 }
 
+type MetaWithoutLock struct {
+	FNamespace []Filename                 `json:"fnamespace"`
+	LNamespace []Location                 `json:"lnamespace"`
+	FMC        map[Filename][]ChunkHandle `json:"fml"`
+	CML        map[ChunkHandle][]Location `json:"cml"`
+}
+
+type JsonResult struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+}
+
 var meta = master_meta{
 	fnamespace: []Filename{},
 	fmc:        make(map[Filename][]ChunkHandle),
@@ -598,6 +610,28 @@ func list(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// check请求，用于返回meta中的部分数据给客户端
+// 要注意对某个结构体序列化时，字段的首字母要大写
+func check(w http.ResponseWriter, r *http.Request) {
+	meta.mu.Lock()
+	info := MetaWithoutLock{
+		FNamespace: meta.fnamespace,
+		LNamespace: meta.lnamespace,
+		FMC:        meta.fmc,
+		CML:        meta.cml,
+	}
+	meta.mu.Unlock()
+	msg, err := json.Marshal(info)
+	if err != nil {
+		fmt.Println("cmn")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("服务器序列化数据失败"))
+		return
+	}
+	w.Write(msg)
+	log.Write("<check>")
+}
+
 func heartbeat() {
 	for {
 		meta.mu.Lock()
@@ -661,6 +695,8 @@ func main() {
 
 	// 处理list请求
 	http.HandleFunc("/list", list)
+
+	http.HandleFunc("/check", check)
 
 	// 发送心跳检查
 	go heartbeat()

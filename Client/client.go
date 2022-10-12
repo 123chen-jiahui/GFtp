@@ -14,14 +14,24 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/liushuochen/gotable"
 	"github.com/tool"
 )
 
 const chunkSize = 1024 * 1024
+
+// MetaWithoutLock meta数据结构
+type MetaWithoutLock struct {
+	FNamespace []string         `json:"fnamespace"`
+	LNamespace []string         `json:"lnamespace"`
+	FMC        map[string][]int `json:"fml"`
+	CML        map[int][]string `json:"cml"`
+}
 
 // StrInterface 将interface转换为string
 func StrInterface(i interface{}) string {
@@ -354,6 +364,88 @@ func list() {
 	}
 }
 
+// 检查master和chunkServer的状态
+// 实际上就是让master把meta传过来
+// 可以通过http get请求
+func check() {
+	response, err := http.Get(tool.Config.MasterURL + "/check")
+	if err != nil {
+		tip("error", "发送请求失败")
+		return
+	}
+	msg, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		tip("error", string(msg))
+		return
+	}
+	var res MetaWithoutLock
+	err = json.Unmarshal(msg, &res)
+	if err != nil {
+		tip("error", "数据反序列化出错")
+		return
+	}
+
+	var fmc []map[string]string
+	for f, chunks := range res.FMC {
+		sms := make(map[string]string)
+		var chunksStr string
+		for i, chunk := range chunks {
+			if i == 0 {
+				chunksStr += strconv.Itoa(chunk)
+			} else {
+				chunksStr += " " + strconv.Itoa(chunk)
+			}
+		}
+		sms["filename"] = f
+		sms["chunks"] = chunksStr
+		fmc = append(fmc, sms)
+	}
+	table, err := gotable.Create("filename", "chunks")
+	if err != nil {
+		tip("error", "创建表格失败："+err.Error())
+		return
+	}
+	for _, v := range fmc {
+		err = table.AddRow(v)
+		if err != nil {
+			tip("error", "生成表格失败："+err.Error())
+			return
+		}
+	}
+	fmt.Println("[filename-chunks]")
+	fmt.Println(table)
+
+	var cml []map[string]string
+	for chunk, locations := range res.CML {
+		sms := make(map[string]string)
+		var locationSet string
+		for i, location := range locations {
+			if i == 0 {
+				locationSet += location
+			} else {
+				locationSet += " " + location
+			}
+		}
+		sms["chunk"] = strconv.Itoa(chunk)
+		sms["locations"] = locationSet
+		cml = append(cml, sms)
+	}
+	table, err = gotable.Create("chunk", "locations")
+	if err != nil {
+		tip("error", "创建表格失败："+err.Error())
+		return
+	}
+	for _, v := range cml {
+		err = table.AddRow(v)
+		if err != nil {
+			tip("error", "生成表格失败："+err.Error())
+			return
+		}
+	}
+	fmt.Println("[chunk-locations]")
+	fmt.Println(table)
+}
+
 func main() {
 	flag.Parse()
 
@@ -364,6 +456,8 @@ func main() {
 		list()
 	case "download":
 		download(*f, *p)
+	case "check":
+		check()
 	default:
 		fmt.Printf("unknown action: %s\n", *action)
 	}
