@@ -76,13 +76,29 @@ func tcpUpload(filePath string) {
 
 	// 此处信道作用：master发出任何error信号时，停止client的上传文件操作
 	// 一没必要；二如果文件较大，会阻塞缓冲区
+	var count int
+	var mu sync.Mutex
 	ch := make(chan int)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func(conn net.Conn, ch chan int) {
+		defer wg.Done()
 		buffer := make([]byte, 100)
 		for {
+			go func(before int) {
+				time.Sleep(time.Second)
+				mu.Lock()
+				after := count
+				mu.Unlock()
+				if after == before {
+					tip("error", "上传失败，tcp服务器无响应")
+					os.Exit(-1)
+				}
+			}(count)
 			n, err = conn.Read(buffer)
+			mu.Lock()
+			count += 1
+			mu.Unlock()
 			if err != nil {
 				tip("error", "读取服务器返回信息出错："+err.Error())
 				os.Exit(-1)
@@ -99,7 +115,6 @@ func tcpUpload(filePath string) {
 				}
 			}
 		}
-		wg.Done()
 	}(conn, ch)
 
 	// conn.Write([]byte("ok"))

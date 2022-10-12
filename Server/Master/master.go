@@ -100,8 +100,6 @@ func Init() {
 	// operation.log格式：
 	// 上载文件：[log] 2022/10/05 19:57:43 upload ${filename} shard ${chunkHandle[]}
 	// 下载文件：[log] download ${filename} (${time})
-
-	fmt.Println("world")
 	file, err := os.OpenFile("./log/operation.log", os.O_CREATE|os.O_RDONLY|os.O_APPEND, 0600)
 	// file, err := os.Open("./log/operation.log")
 	if err != nil {
@@ -513,6 +511,7 @@ StartUploading:
 
 		// ===test 人为打断
 		//if !first {
+		//	meta.mu.Unlock()
 		//	return
 		//}
 		// ===
@@ -700,7 +699,5 @@ func main() {
 
 	// 发送心跳检查
 	go heartbeat()
-
-	metaInfo()
 	http.ListenAndServe(":8080", nil)
 }
