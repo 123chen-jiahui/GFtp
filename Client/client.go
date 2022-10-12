@@ -48,6 +48,8 @@ func tip(prefix, content string) {
 }
 
 func tcpUpload(filePath string) {
+	startTime := time.Now()
+
 	server := tool.Config.MasterIpPort
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", server)
 	if err != nil {
@@ -125,6 +127,9 @@ Loop:
 	}
 
 	wg.Wait()
+
+	elapsed := time.Since(startTime)
+	fmt.Printf("[info] 用时：%v", elapsed)
 }
 
 // 用于批量移除指定目录中的指定后缀文件
@@ -159,6 +164,8 @@ func getChunk(location string, chunk string) ([]byte, error) {
 // 改进意见：
 // 1、这里可以改成get请求（小事）
 func download(filename string, filepath string) {
+	timeStart := time.Now() // 这里计算时间的方式偷懒了，对于断点续传的文件不能这样，应该将中断时的时间记录下来
+
 	response, err := http.PostForm(tool.Config.MasterURL+"download", url.Values{
 		"filename": []string{filename},
 		"location": []string{tool.Location},
@@ -329,6 +336,9 @@ ContinueDownload:
 	targetFile.Write(bytesAll.Bytes())
 	targetFile.Close()
 	tip("info", "下载文件成功")
+
+	elapsed := time.Since(timeStart)
+	fmt.Printf("[info] 用时：%v", elapsed)
 	// 删除临时文件
 	removeFilesWithSuffix(strOfChunksInterface, ".chunk", tmpDir)
 	os.Remove(tmpFilePath)
