@@ -460,11 +460,11 @@ StartUploading:
 			n, err = conn.Read(chunkBuf)
 		}
 		if err != nil {
-			if err == io.EOF && !tmpFileChanged {
-				tmpFileChanged = true
+			if err == io.EOF {
+				tmpFileChanged = false
 				continue
 			} else {
-				msg = "[error] 无法读取要传输的文件"
+				msg = "[error] 无法读取要传输的文件" + err.Error()
 				conn.Write([]byte(msg))
 				return
 			}
