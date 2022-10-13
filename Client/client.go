@@ -111,7 +111,6 @@ func tcpUpload(filePath string) {
 				tip("info", "文件上传成功")
 				break
 			} else if string(buffer[:n]) == "[get]" {
-				fmt.Println("cnm!")
 				chS <- 1
 			} else {
 				fmt.Println(string(buffer[:n]))
@@ -313,7 +312,7 @@ ContinueDownload:
 	bytesLeft := bytes.Buffer{}
 	var strOfChunksInterface []string // 保存chunksInterface的string类型拷贝
 	for ptr < len(chunksInterface) {
-		//if ptr > 3 {
+		//if ptr > 0 {
 		//	return
 		//}
 		chunkStr := StrInterface(chunksInterface[ptr])
