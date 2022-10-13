@@ -76,17 +76,21 @@ func tcpUpload(filePath string) {
 
 	// 此处信道作用：master发出任何error信号时，停止client的上传文件操作
 	// 一没必要；二如果文件较大，会阻塞缓冲区
-	var count int
+	//var count int
+	//var mu sync.Mutex
+	chError := make(chan int)
+	chSend := make(chan int)
 	var mu sync.Mutex
-	ch := make(chan int)
+	var count int
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func(conn net.Conn, ch chan int) {
+	go func(conn net.Conn, chE chan int, chS chan int) {
 		defer wg.Done()
 		buffer := make([]byte, 100)
+		chS <- 1
 		for {
 			go func(before int) {
-				time.Sleep(time.Second)
+				time.Sleep(time.Second * 2)
 				mu.Lock()
 				after := count
 				mu.Unlock()
@@ -106,16 +110,19 @@ func tcpUpload(filePath string) {
 			if string(buffer[:n]) == "end" {
 				tip("info", "文件上传成功")
 				break
+			} else if string(buffer[:n]) == "[get]" {
+				fmt.Println("cnm!")
+				chS <- 1
 			} else {
 				fmt.Println(string(buffer[:n]))
 				msgList := strings.Split(string(buffer[:n]), " ")
 				if msgList[0] == "[error]" {
-					ch <- 1
+					chE <- 1
 					break
 				}
 			}
 		}
-	}(conn, ch)
+	}(conn, chError, chSend)
 
 	// conn.Write([]byte("ok"))
 	// 发送文件内容
@@ -131,13 +138,16 @@ Loop:
 		n, err := file.Read(buf)
 		if err != nil && io.EOF == err {
 			conn.Write([]byte("finish"))
+			<-chSend // 防止协程阻塞
 			break
 		}
 		select {
-		case <-ch:
+		case <-chError:
 			break Loop
-		default:
+		case <-chSend:
 			conn.Write(buf[:n])
+			//default:
+			//	conn.Write(buf[:n])
 		}
 	}
 

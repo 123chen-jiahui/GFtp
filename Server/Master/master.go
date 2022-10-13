@@ -393,6 +393,7 @@ func handleConnection(conn net.Conn) {
 
 			// 检查
 			n, _ := conn.Read(chunkBuf)
+			conn.Write([]byte("[get]"))
 			fileBuf.Write(chunkBuf[:n]) // 加入到文件中
 			if !bytes.Equal(chunkBuf, content) {
 				tmpFileChanged = true
@@ -458,6 +459,7 @@ StartUploading:
 			n, err = fileBuf.Read(chunkBuf)
 		} else {
 			n, err = conn.Read(chunkBuf)
+			conn.Write([]byte("[get]"))
 		}
 		if err != nil {
 			if err == io.EOF {
